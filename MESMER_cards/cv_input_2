@@ -1,0 +1,21 @@
+Ebeam 100.
+Qmu 1
+ord born
+arun off
+hadoff yes
+nphot 1021
+nev 20000
+store yes no
+storemode 0
+path cv_test-run_2
+seed 42
+mode weighted
+nwarmup 1000
+NFF 0
+NZ 6
+NEmumin 1d0
+NQcut 0.774d0
+thmumin 0.1d0
+
+ththr 0.1d0
+run

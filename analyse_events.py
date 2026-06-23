@@ -1,0 +1,250 @@
+import re
+import sys
+import csv
+import argparse
+from dataclasses import dataclass, asdict
+from typing import Optional
+import matplotlib.pyplot as plt
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Particle:
+    pdg: int          # signed PDG code  (+13 = μ⁻, -13 = μ⁺)
+    px:  float        # GeV
+    py:  float        # GeV
+    pz:  float        # GeV
+
+    @property
+    def pt(self) -> float:
+        return (self.px**2 + self.py**2) ** 0.5
+
+    @property
+    def p(self) -> float:
+        return (self.px**2 + self.py**2 + self.pz**2) ** 0.5
+
+    @property
+    def label(self) -> str:
+        return {13: "mu-", -13: "mu+", 11: "e-", -11: "e+", 22: "gamma"}.get(
+            self.pdg, str(self.pdg)
+        )
+
+
+@dataclass
+class TridentEvent:
+    event_number: int
+    weight:       float            # first weight value on preamble line 1
+    incoming_mu:  Particle         # always exactly one
+    outgoing_mu:  list[Particle]   # 1 for elastic/Bhabha, 3 for trident
+    electrons:    list[Particle]   # outgoing electrons/positrons
+    photons:      list[Particle]   # NLO real photons
+
+    @property
+    def n_out_muons(self) -> int:
+        return len(self.outgoing_mu)
+
+    @property
+    def n_photons(self) -> int:
+        return len(self.photons)
+
+    @property
+    def topology(self) -> str:
+        """Human-readable topology label."""
+        if self.n_out_muons == 1:
+            base = "elastic"
+        elif self.n_out_muons == 3:
+            base = "trident"
+        else:
+            base = f"{self.n_out_muons}mu"
+        return base + (f"+{self.n_photons}γ" if self.n_photons else "")
+
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
+
+_EVENT_OPEN  = re.compile(r'<event>', re.IGNORECASE)
+_EVENT_CLOSE = re.compile(r'</event>', re.IGNORECASE)
+
+# A particle line starts with an integer (possibly negative) then exactly
+# three floating-point numbers separated by whitespace.
+_PARTICLE = re.compile(
+    r'^\s*(-?\d+)\s+([-+eE\d.]+)\s+([-+eE\d.]+)\s+([-+eE\d.]+)\s*$'
+)
+
+# A pure-float line (preamble weights): one or more floats, no leading integer.
+# We use this to distinguish preamble from particle lines robustly.
+_FLOAT_ONLY = re.compile(
+    r'^\s*([-+]?\d*\.?\d+(?:[eE][+-]?\d+)?)(\s+[-+]?\d*\.?\d+(?:[eE][+-]?\d+)?)*\s*$'
+)
+
+
+def _is_particle_line(line: str) -> Optional[tuple]:
+    """Return (pdg, px, py, pz) if line is a particle line, else None."""
+    m = _PARTICLE.match(line)
+    if not m:
+        return None
+    pdg = int(m.group(1))
+    # Guard: PDG codes are small integers; reject lines where the 'PDG' token
+    # is actually a large float that happens to match (e.g. a weight value
+    # that rounds to integer).  Real PDG codes |pdg| < 10000.
+    if abs(pdg) > 9999:
+        return None
+    return pdg, float(m.group(2)), float(m.group(3)), float(m.group(4))
+
+
+def _parse_event_block(block: list[str]) -> Optional[TridentEvent]:
+    stripped = [l for l in block if l.strip()]
+    if len(stripped) < 4:
+        return None
+
+    # Lines 0,1,2: seed, event_number, n_final_state  (all plain integers)
+    try:
+        event_number = int(stripped[1].strip())
+    except (ValueError, IndexError):
+        return None
+
+    # Extract weight: first float on the first preamble line after line 2.
+    weight = 0.0
+    for line in stripped[3:]:
+        parsed = _is_particle_line(line)
+        if parsed is not None:
+            break          # reached particle lines; no weight found (unusual)
+        tokens = line.split()
+        try:
+            weight = float(tokens[0])
+            break
+        except (ValueError, IndexError):
+            continue
+
+    # Collect all particle lines
+    all_muons:     list[Particle] = []
+    all_electrons: list[Particle] = []
+    all_photons:   list[Particle] = []
+
+    for line in stripped:
+        parsed = _is_particle_line(line)
+        if parsed is None:
+            continue
+        pdg, px, py, pz = parsed
+        p = Particle(pdg=pdg, px=px, py=py, pz=pz)
+        if abs(pdg) == 13:
+            all_muons.append(p)
+        elif abs(pdg) == 11:
+            all_electrons.append(p)
+        elif pdg == 22:
+            all_photons.append(p)
+
+    if not all_muons:
+        print(f"  [WARNING] Event {event_number}: no muon lines found; skipping.",
+              file=sys.stderr)
+        return None
+
+    # Convention: first muon line is the beam muon (highest pz, pT ~ 0).
+    incoming = all_muons[0]
+    outgoing = all_muons[1:]
+
+    return TridentEvent(
+        event_number=event_number,
+        weight=weight,
+        incoming_mu=incoming,
+        outgoing_mu=outgoing,
+        electrons=all_electrons,
+        photons=all_photons,
+    )
+
+
+def parse_mesmer_file(filepath: str) -> list[TridentEvent]:
+    events: list[TridentEvent] = []
+    with open(filepath) as fh:
+        lines = fh.readlines()
+
+    inside = False
+    buf: list[str] = []
+    for line in lines:
+        if _EVENT_OPEN.search(line):
+            inside = True
+            buf = []
+        elif _EVENT_CLOSE.search(line):
+            inside = False
+            ev = _parse_event_block(buf)
+            if ev is not None:
+                events.append(ev)
+            buf = []
+        elif inside:
+            buf.append(line)
+
+    return events
+
+def makePlots(events):
+
+    weight = []
+    incoming_muon_p = []
+    scatter_muon_p = []
+    mupair_muon_p = []
+    mupair_antimuon_p = []
+    mupair_p_asym = []
+
+    for ev in events:
+        if ev.topology != "trident":
+            continue
+
+        weight.append(ev.weight)
+        
+        incoming_muon_p.append(ev.incoming_mu.p)
+        scatter_muon_p.append(ev.outgoing_mu[0].p)
+        
+        
+        if ev.outgoing_mu[1].pdg == 13:
+            mupair_p_asym.append(ev.outgoing_mu[1].p - ev.outgoing_mu[2].p)
+            mupair_muon_p.append(ev.outgoing_mu[1].p)
+            mupair_antimuon_p.append(ev.outgoing_mu[2].p)
+            
+        elif ev.outgoing_mu[1].pdg == -13:
+            mupair_p_asym.append(ev.outgoing_mu[2].p - ev.outgoing_mu[1].p)
+            mupair_muon_p.append(ev.outgoing_mu[2].p)
+            mupair_antimuon_p.append(ev.outgoing_mu[1].p)
+
+        else:
+            raise RuntimeError("Expected muon!")
+        mupair_p_asym[-1] /= ev.outgoing_mu[1].p + ev.outgoing_mu[2].p
+
+    plt.figure()
+    plt.hist(mupair_p_asym, weights = weight, range = (-1.2, 1.2), bins = 60, histtype = "step", label = "Muon pair")
+    plt.xlabel(r"$\frac{|p(\mu^-)| - |p(\mu^+)|}{|p(\mu^-)| + |p(\mu^+)|}$") 
+    plt.legend()
+    plt.tight_layout()
+
+    plt.figure()
+    plt.hist(incoming_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = "Incoming muon")
+    plt.hist(scatter_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = "Scattered muon")
+    plt.hist(mupair_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = r"$\mu^-$")
+    plt.hist(mupair_antimuon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = r"$\mu^+$")
+    plt.xlabel(r"$|p|$ [GeV]") 
+    plt.legend()
+    plt.tight_layout()
+    
+    plt.show()
+        
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main():
+    ap = argparse.ArgumentParser(
+        description="Extract muon kinematics from a MESMER output file."
+    )
+    ap.add_argument("input", help="MESMER output file")
+    args = ap.parse_args()
+
+    events = parse_mesmer_file(args.input)
+
+    if not events:
+        print("No events found. Check input file format.", file=sys.stderr)
+        sys.exit(1)
+
+    makePlots(events)
+
+if __name__ == "__main__":
+    main()
