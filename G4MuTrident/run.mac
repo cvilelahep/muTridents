@@ -1,0 +1,17 @@
+# run.mac  –  batch macro for muon-trident simulation
+# Usage:  ./muon_trident run.mac
+
+# /run/numberOfThreads 1
+/run/initialize
+
+# Verbose settings – quiet for bulk runs, increase for debugging
+/run/verbose       1
+/event/verbose     0
+/tracking/verbose  0
+
+# Override beam energy if desired (default 100 GeV set in PrimaryGeneratorAction)
+# /gun/energy 100 GeV
+
+# Run 1000 events
+# Trident cross-section in 10 X0 carbon is ~O(1%) so expect ~10 tridents
+/run/beamOn 1000
