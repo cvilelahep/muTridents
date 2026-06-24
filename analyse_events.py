@@ -278,14 +278,18 @@ def main():
     if args.geant4 is not None:
         events_geant4 = parse_geant4_file(args.geant4)
 
-    makePlots(events_mesmer)
-    makePlots(events_geant4)
-
-    plt.show()
-
     if (not events_mesmer) and (not events_geant4) :
         print("No events found. Check input file format.", file=sys.stderr)
         sys.exit(1)
+
+    if events_mesmer:
+        makePlots(events_mesmer)
+    if events_geant4:
+        makePlots(events_geant4)
+
+    plt.show()
+
+
 
 if __name__ == "__main__":
     main()
