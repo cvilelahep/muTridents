@@ -196,25 +196,26 @@ def parse_geant4_file(filepath: str) -> list[TridentEvent]:
             float(entry.attrib["value"])
             for entry in row.findall("entry")
         ]
-    row = dict(zip(columns, values))
-    p_incoming = Particle(pdg=row["inc_pdg"], px=row["inc_px"], py=row["inc_py"], pz=row["inc_pz"])
-    p_scatter = Particle(pdg=row["scat_pdg"], px=row["scat_px"], py=row["scat_py"], pz=row["scat_pz"])
-    p_pair_minus = Particle(pdg=row["pair_neg_pdg"], px=row["pair_neg_px"], py=row["pair_neg_py"], pz=row["pair_neg_pz"])
-    p_pair_plus = Particle(pdg=row["pair_pos_pdg"], px=row["pair_pos_px"], py=row["pair_pos_py"], pz=row["pair_pos_pz"])
-
-    events.append(TridentEvent(
-        event_number=i_row,
-        weight=1.,
-        incoming_mu=p_incoming,
-        outgoing_mu=[p_scatter, p_pair_minus, p_pair_plus],
-        electrons=[],
-        photons=[],
+        row = dict(zip(columns, values))
+#        p_incoming = Particle(pdg=row["inc_pdg"], px=row["inc_px"], py=row["inc_py"], pz=row["inc_pz"])
+        p_incoming = Particle(pdg=row["scat_pdg"], px=(row["scat_px"]+row["pair_neg_px"]+row["pair_pos_px"]), py=(row["scat_py"]+row["pair_neg_py"]+row["pair_pos_py"]), pz=(row["scat_pz"]+row["pair_neg_pz"]+row["pair_pos_pz"]))
+        p_scatter = Particle(pdg=row["scat_pdg"], px=row["scat_px"], py=row["scat_py"], pz=row["scat_pz"])
+        p_pair_minus = Particle(pdg=row["pair_neg_pdg"], px=row["pair_neg_px"], py=row["pair_neg_py"], pz=row["pair_neg_pz"])
+        p_pair_plus = Particle(pdg=row["pair_pos_pdg"], px=row["pair_pos_px"], py=row["pair_pos_py"], pz=row["pair_pos_pz"])
+    
+        events.append(TridentEvent(
+            event_number=i_row,
+            weight=1.,
+            incoming_mu=p_incoming,
+            outgoing_mu=[p_scatter, p_pair_minus, p_pair_plus],
+            electrons=[],
+            photons=[])
         )
-    )
+    
     return events
 
 
-def makePlots(events):
+def makePlots(events, title = None, weighted = False):
 
     weight = []
     incoming_muon_p = []
@@ -227,7 +228,10 @@ def makePlots(events):
         if ev.topology != "trident":
             continue
 
-        weight.append(ev.weight)
+        if weighted:
+            weight.append(ev.weight)
+        else:
+            weight.append(1.)
         
         incoming_muon_p.append(ev.incoming_mu.p)
         scatter_muon_p.append(ev.outgoing_mu[0].p)
@@ -251,16 +255,26 @@ def makePlots(events):
     plt.hist(mupair_p_asym, weights = weight, range = (-1.2, 1.2), bins = 60, histtype = "step", label = "Muon pair")
     plt.xlabel(r"$\frac{|p(\mu^-)| - |p(\mu^+)|}{|p(\mu^-)| + |p(\mu^+)|}$") 
     plt.legend()
+    if title:
+        plt.title(title)
     plt.tight_layout()
 
     plt.figure()
-    plt.hist(incoming_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = "Incoming muon")
-    plt.hist(scatter_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = "Scattered muon")
-    plt.hist(mupair_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = r"$\mu^-$")
-    plt.hist(mupair_antimuon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = r"$\mu^+$")
+    h_incoming, bins, _ = plt.hist(incoming_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = "Incoming muon", density = True)
+    h_scatter, bins, _ = plt.hist(scatter_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = "Scattered muon", density = True)
+    h_mupair_muon, bins, _ = plt.hist(mupair_muon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = r"$\mu^-$", density = True)
+    h_mupair_antimuon, bins, _ = plt.hist(mupair_antimuon_p, weights = weight, range = (0, 110), bins = 60, histtype = "step", label = r"$\mu^+$", density = True)
     plt.xlabel(r"$|p|$ [GeV]") 
     plt.legend()
+    if title:
+        plt.title(title)
+
     plt.tight_layout()
+    return {"bins": bins,
+            "h_incoming": h_incoming,
+            "h_scatter" : h_scatter,
+            "h_mupair_muon": h_mupair_muon,
+            "h_mupair_antimuon": h_mupair_antimuon}
             
 # ---------------------------------------------------------------------------
 # Main
@@ -283,9 +297,37 @@ def main():
         sys.exit(1)
 
     if events_mesmer:
-        makePlots(events_mesmer)
+        mesmer_hists_unweighted = makePlots(events_mesmer, title = "MESMER", weighted = False)
+        mesmer_hists_weighted = makePlots(events_mesmer, title = "MESMER", weighted = True)
     if events_geant4:
-        makePlots(events_geant4)
+        geant4_hists = makePlots(events_geant4, title = "Geant4", weighted = False)
+
+    plt.figure()
+    plt.stairs(edges = geant4_hists["bins"], values = geant4_hists["h_scatter"], label = r"Geant4 scattered $\mu$")
+    plt.stairs(edges = geant4_hists["bins"], values = mesmer_hists_unweighted["h_scatter"], label = r"MESMER scattered $\mu$ (unweighted)")
+    plt.stairs(edges = geant4_hists["bins"], values = mesmer_hists_weighted["h_scatter"], label = r"MESMER scattered $\mu$ (weighted)")
+    plt.xlabel(r"$|p|$ [GeV]")     
+    plt.legend()
+    plt.ylim(bottom = 0)
+    plt.tight_layout()
+
+    plt.figure()
+    plt.stairs(edges = geant4_hists["bins"], values = geant4_hists["h_mupair_muon"], label = r"Geant4 pair $\mu^-$")
+    plt.stairs(edges = geant4_hists["bins"], values = mesmer_hists_unweighted["h_mupair_muon"], label = r"MESMER pair $\mu^-$ (unweighted)")
+    plt.stairs(edges = geant4_hists["bins"], values = mesmer_hists_weighted["h_mupair_muon"], label = r"MESMER pair $\mu^-$ (weighted)")
+    plt.xlabel(r"$|p|$ [GeV]")     
+    plt.legend()
+    plt.ylim(bottom = 0)
+    plt.tight_layout()
+
+    plt.figure()
+    plt.stairs(edges = geant4_hists["bins"], values = geant4_hists["h_mupair_antimuon"], label = r"Geant4 pair $\mu^+$")
+    plt.stairs(edges = geant4_hists["bins"], values = mesmer_hists_unweighted["h_mupair_antimuon"], label = r"MESMER pair $\mu^+$ (unweighted)")
+    plt.stairs(edges = geant4_hists["bins"], values = mesmer_hists_weighted["h_mupair_antimuon"], label = r"MESMER pair $\mu^+$ (weighted)")
+    plt.xlabel(r"$|p|$ [GeV]")     
+    plt.legend()
+    plt.ylim(bottom = 0)
+    plt.tight_layout()
 
     plt.show()
 
