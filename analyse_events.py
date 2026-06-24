@@ -4,6 +4,7 @@ import csv
 import argparse
 from dataclasses import dataclass, asdict
 from typing import Optional
+import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
@@ -178,6 +179,41 @@ def parse_mesmer_file(filepath: str) -> list[TridentEvent]:
 
     return events
 
+def parse_geant4_file(filepath: str) -> list[TridentEvent]:
+    events: list[TridentEvent] = []
+    with open(filepath) as fh:
+        tree = ET.parse(fh)
+        root = tree.getroot()
+
+        tuple_elem = root.find("tuple")
+
+        # Get column names
+    columns = [col.attrib["name"] for col in tuple_elem.find("columns").findall("column")]
+
+    # Parse rows
+    for i_row, row in enumerate(tuple_elem.find("rows").findall("row")):
+        values = [
+            float(entry.attrib["value"])
+            for entry in row.findall("entry")
+        ]
+    row = dict(zip(columns, values))
+    p_incoming = Particle(pdg=row["inc_pdg"], px=row["inc_px"], py=row["inc_py"], pz=row["inc_pz"])
+    p_scatter = Particle(pdg=row["scat_pdg"], px=row["scat_px"], py=row["scat_py"], pz=row["scat_pz"])
+    p_pair_minus = Particle(pdg=row["pair_neg_pdg"], px=row["pair_neg_px"], py=row["pair_neg_py"], pz=row["pair_neg_pz"])
+    p_pair_plus = Particle(pdg=row["pair_pos_pdg"], px=row["pair_pos_px"], py=row["pair_pos_py"], pz=row["pair_pos_pz"])
+
+    events.append(TridentEvent(
+        event_number=i_row,
+        weight=1.,
+        incoming_mu=p_incoming,
+        outgoing_mu=[p_scatter, p_pair_minus, p_pair_plus],
+        electrons=[],
+        photons=[],
+        )
+    )
+    return events
+
+
 def makePlots(events):
 
     weight = []
@@ -225,9 +261,7 @@ def makePlots(events):
     plt.xlabel(r"$|p|$ [GeV]") 
     plt.legend()
     plt.tight_layout()
-    
-    plt.show()
-        
+            
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -235,16 +269,23 @@ def main():
     ap = argparse.ArgumentParser(
         description="Extract muon kinematics from a MESMER output file."
     )
-    ap.add_argument("input", help="MESMER output file")
+    ap.add_argument("--mesmer", help="MESMER file")
+    ap.add_argument("--geant4", help="Geant4 file")
     args = ap.parse_args()
 
-    events = parse_mesmer_file(args.input)
+    if args.mesmer is not None:
+        events_mesmer = parse_mesmer_file(args.mesmer)
+    if args.geant4 is not None:
+        events_geant4 = parse_geant4_file(args.geant4)
 
-    if not events:
+    makePlots(events_mesmer)
+    makePlots(events_geant4)
+
+    plt.show()
+
+    if (not events_mesmer) and (not events_geant4) :
         print("No events found. Check input file format.", file=sys.stderr)
         sys.exit(1)
-
-    makePlots(events)
 
 if __name__ == "__main__":
     main()
